@@ -84,7 +84,7 @@ class CurrentTime:
 class NtpException(Exception):
     """Exception raised by NTP Packet module
     
-    Indicates an error packing or unpacking a packet
+    Indicates an error packing, unpacking or constructing a packet
     """
     pass
 
@@ -128,14 +128,22 @@ class NtpPacket:
         LORC    LORAN-C radionavigation system
         OMEG    OMEGA radionavigation system
         GPS     Global Positioning Service
+
+        Raises:
+        NtpException -- in case invalid or incomplete ntp fields
         """
         self.__leap = LeapInictaor.NO_WARNING
         
         if version > 0 and version < 5:
             self.__version = np.int8(version)
+        else:
+            raise NtpException("Invalid NTP Version")
+            
         
         if type(mode) is Mode:
             self.__mode = mode
+        else: 
+            raise NtpException("Invalid NTP mode")
         
         self.__stratum = np.int8(1)         #8 bit int
         
@@ -255,5 +263,8 @@ class NtpPacket:
         fracPart = int(abs(floatNum - int(floatNum)) * 2 ** fracBits)
         return intPart << fracBits | fracPart
 
-   
+taskQueue = Queue.Queue()
+utcTime = CurrentTime()
+
+
 
