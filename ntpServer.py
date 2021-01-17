@@ -1,3 +1,4 @@
+import numpy as np
 import socket
 import struct
 import time
@@ -57,6 +58,7 @@ class CurrentTime:
         Parameters:
         time -- current time in UTC format
         """
+        
         mutex.acquire()
         self.__gpsTime = time
         self.__perfTime = time.perf_counter()
@@ -77,7 +79,15 @@ class CurrentTime:
         mutex.release()
 
         return (elapsedTime, refTime)
-        
+
+
+class NtpException(Exception):
+    """Exception raised by NTP Packet module
+    
+    Indicates an error packing or unpacking a packet
+    """
+    pass
+
 
 class NtpPacket: 
     """NTP Packet Class
@@ -120,20 +130,25 @@ class NtpPacket:
         GPS     Global Positioning Service
         """
         self.__leap = LeapInictaor.NO_WARNING
-        self.__version = version
-        self.__mode = mode
-        self.__stratum = 1
         
-        self.__poll = 0
-        self.__precision = 0
-        self.__rootDelay = 0
-        self.__rootDispersion = 0
-        self.__refId = refId
+        if version > 0 and version < 5:
+            self.__version = np.int8(version)
+        
+        if type(mode) is Mode:
+            self.__mode = mode
+        
+        self.__stratum = np.int8(1)         #8 bit int
+        
+        self.__poll = np.int8(0)            #8 bit int
+        self.__precision = np.int8(0)       #8 bit int
+        self.__rootDelay = np.int32(0)      #32 bit fixed
+        self.__rootDispersion = np.int32(0) #32 bit fixed
+        self.__refId = refId                #4 character string
 
-        self.__refTimestamp = 0
-        self.__originTimestamp = 0
-        self.__rxTimestamp = 0
-        self.__txTimestamp = 0
+        self.__refTimestamp = np.int64(0)   #64 bit fixed
+        self.__originTimestamp = np.int64(0)#64 bit fixed
+        self.__rxTimestamp = np.int64(0)    #64 bit fixed
+        self.__txTimestamp = np.int64(0)    #64 bit fixed
 
     def setPoll(self, poll):
         """Set Poll
@@ -143,7 +158,7 @@ class NtpPacket:
         Parameters:
         poll -- poll time for packet
         """
-        self.__poll = poll
+        self.__poll = np.int8(poll)
     
     def setPrecision(self, precisionFloat):
         """Set Precision
@@ -155,8 +170,74 @@ class NtpPacket:
         Parameters:
         precisionFloat -- floating point value of the precision
         """
-        self.__precision = round(math.log2(precisionFloat))
+        self.__precision = np.int8(round(math.log2(precisionFloat)))
+    
+    def setTimestamps(self, refTimestamp, originTimestamp, rxTimestamp):
+        """Set Timestamps
 
+        Sets the reference, origin and recieve timestamps. 
+        Transmit timeset is set when packet gets packed
+
+        Parameters:
+        refTimestamp -- last time server was set by an external source
+        originTimestamp -- the transmit time of the ntp client packet
+        rxTimestamp --- timestamp of when the client packet was recieved
+        """
+        self.__refTimestamp = np.int64(self._floatToFixed(refTimestamp, 32))
+        self.__originTimestamp = np.int64(self._floatToFixed(originTimestamp, 32))
+        self.__rxTimestamp = np.int64(self._floatToFixed(rxTimestamp, 32))
+
+    def getTxTimestamp(self):
+        """Get Transmitted timestamp
+
+        Gets the time this packet was trasmitted
+
+        Returns:
+        Transmitted timestamp in UTC format
+        """
+        return self.__txTimestamp
+    
+    def getBuffer(self, txTimestamp):
+        """Get Packet Buffer
+
+        Converts this packet to a buffer that can be transmitted via
+        UDP.
+
+        Parameters:
+        txTimestamp -- the current timestamp, this gets placed in the packet 
+        before it is packed into the buffer
+
+        Returns:
+        Buffer representing the packet
+
+        Raises:
+        NtpException -- in case invalid or incomplete ntp fields
+        """
+
+        self.__txTimestamp = np.int64(self._floatToFixed(txTimestamp))
+
+        try:
+            packed = struct.pack(self._PACKET_FORMAT, 
+                                int(self.__leap.value << 6 | self.__version << 3 | self.__mode.value),
+                                int(self.__stratum),     
+                                int(self.__poll),        
+                                int(self.__precision),
+                                int(self.__rootDelay),
+                                int(self.__rootDispersion),
+                                int(self.__refId),
+                                int((self.__refTimestamp & 0xFFFFFFFF00000000) >> 32), 
+                                int(self.__refTimestamp & 0xFFFFFFFF),
+                                int((self.__originTimestamp & 0xFFFFFFFF00000000) >> 32), 
+                                int(self.__originTimestamp & 0xFFFFFFFF),
+                                int((self.__rxTimestamp & 0xFFFFFFFF00000000) >> 32), 
+                                int(self.__rxTimestamp & 0xFFFFFFFF),
+                                int((self.__txTimestamp & 0xFFFFFFFF00000000) >> 32), 
+                                int(self.__txTimestamp & 0xFFFFFFFF))
+        except struct.error:
+            raise NtpException("Invalid NTP Fields")
+        
+        return packed
+        
     def _floatToFixed(self, floatNum, fracBits):
         """Floating point to fixed point conversion
 
