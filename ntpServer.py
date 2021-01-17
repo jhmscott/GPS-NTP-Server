@@ -6,10 +6,12 @@ import threading
 from enum import Enum
 import math
 import Queue
+import datetime
 
-GPS_POLL = 1.0              #1Hz GPS module is used
-CLK_PRECISION = 10 ** -9    #Perf Counter has Nanosecond precision
-NTP_VERSION = 3
+GPS_POLL = 1.0                              #1Hz GPS module is used
+CLK_PRECISION = 10 ** -9                    #Perf Counter has Nanosecond precision
+NTP_VERSION = 3                             #NTP version used by server
+NTP_MAX_VERSION = 4                         #max supported NTP version
 
 mutex = threading.Lock()
 
@@ -96,6 +98,7 @@ class NtpPacket:
     """
 
     _PACKET_FORMAT = "!B B B b 11I"
+    _UTC_TO_NTP = np.uint64(2208988800 << 32)    #time between beginnning of NTP and UTC epoch in fixed
 
     def __init__(self, version, mode, refId):
         """Constructor
@@ -145,18 +148,48 @@ class NtpPacket:
         else: 
             raise NtpException("Invalid NTP mode")
         
-        self.__stratum = np.int8(1)         #8 bit int
+        self.__stratum          = np.int8(1)    #8 bit int
         
-        self.__poll = np.int8(0)            #8 bit int
-        self.__precision = np.int8(0)       #8 bit int
-        self.__rootDelay = np.int32(0)      #32 bit fixed
-        self.__rootDispersion = np.int32(0) #32 bit fixed
-        self.__refId = refId                #4 character string
+        self.__poll             = np.int8(0)    #8 bit signed int
+        self.__precision        = np.int8(0)    #8 bit signed int
+        self.__rootDelay        = np.int32(0)   #32 bit signed fixed
+        self.__rootDispersion   = np.int32(0)   #32 bit signed fixed
+        self.__refId            = refId         #4 character string
 
-        self.__refTimestamp = np.int64(0)   #64 bit fixed
-        self.__originTimestamp = np.int64(0)#64 bit fixed
-        self.__rxTimestamp = np.int64(0)    #64 bit fixed
-        self.__txTimestamp = np.int64(0)    #64 bit fixed
+        self.__refTimestamp     = np.uint64(0)  #64 bit unsigned fixed
+        self.__originTimestamp  = np.uint64(0)  #64 bit unsigned fixed
+        self.__rxTimestamp      = np.uint64(0)  #64 bit undsined fixed
+        self.__txTimestamp      = np.uint64(0)  #64 bit unsigned fixed
+
+    def __init__(self, buffer):
+        """Constructor
+
+        Constructs an NTP pcaket from a valid buffer
+
+        Parameter:
+        buffer -- buffer containing NTP packet
+
+        Raises:        
+        NtpException -- in case invalid or incomplete ntp fields
+        """
+        try:
+            unpacked = struct.unpack(self._PACKET_FORMAT, buffer[0:struct.calcsize(self._PACKET_FORMAT)])
+        except struct.error:
+            raise NtpException("Invalid NTP fields")
+
+        self.__leap             = np.int8((unpacked[0] >> 6) & 0x3)
+        self.__version          = np.int8((unpacked[0] >> 3) & 0x7)
+        self.__mode             = np.int8(unpacked[0] & 0x7)
+        self.__stratum          = np.int8(unpacked[1])
+        self.__poll             = np.int8(unpacked[2])
+        self.__precision        = np.int8(unpacked[3])
+        self.__rootDelay        = np.int32(unpacked[4])
+        self.__rootDispersion   = np.int32(unpacked[5])
+        self.__refId            = np.int32(unpacked[6])
+        self.__refTimestamp     = np.uint64((unpacked[7] << 32) | unpacked[8])
+        self.__originTimestamp  = np.uint64((unpacked[9] << 32) | unpacked[10])
+        self.__rxTimestamp      = np.uint64((unpacked[11] << 32) | unpacked[12])
+        self.__txTimestamp      = np.uint64((unpacked[13] << 32) | unpacked[14])            
 
     def setPoll(self, poll):
         """Set Poll
@@ -180,6 +213,18 @@ class NtpPacket:
         """
         self.__precision = np.int8(round(math.log2(precisionFloat)))
     
+    def setRootValues(self, rootDelay, rootDispersion):
+        """Set Root Values
+
+        Sets the root delay and root dispersion values of the packet
+
+        Parameters:
+        rootDelay -- root delay value in floating 
+        rootDispersion -- root dispersion value in floating
+        """
+        self.__rootDelay = np.int32(self._floatToFixed(rootDelay, 16))
+        self.__rootDispersion = np.int32(self._floatToFixed(rootDispersion, 16))
+
     def setTimestamps(self, refTimestamp, originTimestamp, rxTimestamp):
         """Set Timestamps
 
@@ -191,9 +236,9 @@ class NtpPacket:
         originTimestamp -- the transmit time of the ntp client packet
         rxTimestamp --- timestamp of when the client packet was recieved
         """
-        self.__refTimestamp = np.int64(self._floatToFixed(refTimestamp, 32))
-        self.__originTimestamp = np.int64(self._floatToFixed(originTimestamp, 32))
-        self.__rxTimestamp = np.int64(self._floatToFixed(rxTimestamp, 32))
+        self.__refTimestamp     = np.uint64(self._floatToFixed(refTimestamp, 32)) + self._UTC_TO_NTP
+        self.__originTimestamp  = np.uint64(self._floatToFixed(originTimestamp, 32)) + self._UTC_TO_NTP
+        self.__rxTimestamp      = np.uint64(self._floatToFixed(rxTimestamp, 32)) + self._UTC_TO_NTP
 
     def getTxTimestamp(self):
         """Get Transmitted timestamp
@@ -222,7 +267,7 @@ class NtpPacket:
         NtpException -- in case invalid or incomplete ntp fields
         """
 
-        self.__txTimestamp = np.int64(self._floatToFixed(txTimestamp))
+        self.__txTimestamp = np.int64(self._floatToFixed(txTimestamp)) + self._UTC_TO_NTP
 
         try:
             packed = struct.pack(self._PACKET_FORMAT, 
