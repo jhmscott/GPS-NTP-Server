@@ -148,18 +148,18 @@ class NtpPacket:
         else: 
             raise NtpException("Invalid NTP mode")
         
-        self.__stratum          = np.int8(1)    #8 bit int
+        self.__stratum          = np.int8(1)                #8 bit int
         
-        self.__poll             = np.int8(0)    #8 bit signed int
-        self.__precision        = np.int8(0)    #8 bit signed int
-        self.__rootDelay        = np.int32(0)   #32 bit signed fixed
-        self.__rootDispersion   = np.int32(0)   #32 bit signed fixed
-        self.__refId            = refId         #4 character string
+        self.__poll             = np.int8(0)                #8 bit signed int
+        self.__precision        = np.int8(0)                #8 bit signed int
+        self.__rootDelay        = np.int32(0)               #32 bit signed fixed
+        self.__rootDispersion   = np.int32(0)               #32 bit signed fixed
+        self.__refId            = self._stringToInt(refId)  #4 character string
 
-        self.__refTimestamp     = np.uint64(0)  #64 bit unsigned fixed
-        self.__originTimestamp  = np.uint64(0)  #64 bit unsigned fixed
-        self.__rxTimestamp      = np.uint64(0)  #64 bit undsined fixed
-        self.__txTimestamp      = np.uint64(0)  #64 bit unsigned fixed
+        self.__refTimestamp     = np.uint64(0)              #64 bit unsigned fixed
+        self.__originTimestamp  = np.uint64(0)              #64 bit unsigned fixed
+        self.__rxTimestamp      = np.uint64(0)              #64 bit undsined fixed
+        self.__txTimestamp      = np.uint64(0)              #64 bit unsigned fixed
 
     def __init__(self, buffer):
         """Constructor
@@ -177,9 +177,9 @@ class NtpPacket:
         except struct.error:
             raise NtpException("Invalid NTP fields")
 
-        self.__leap             = np.int8((unpacked[0] >> 6) & 0x3)
+        self.__leap             = LeapInictaor((unpacked[0] >> 6) & 0x3)
         self.__version          = np.int8((unpacked[0] >> 3) & 0x7)
-        self.__mode             = np.int8(unpacked[0] & 0x7)
+        self.__mode             = Mode(unpacked[0] & 0x7)
         self.__stratum          = np.int8(unpacked[1])
         self.__poll             = np.int8(unpacked[2])
         self.__precision        = np.int8(unpacked[3])
@@ -307,6 +307,28 @@ class NtpPacket:
         intPart = int(floatNum)
         fracPart = int(abs(floatNum - int(floatNum)) * 2 ** fracBits)
         return intPart << fracBits | fracPart
+
+    def _stringToInt(self, refString):
+        """ string to Integer
+
+        Converts a 4 character string to a 32 bit integer, for 
+        use with the NTP Reference ID.
+
+        Parameters:
+        refString -- 4 character string representing the ref ID
+
+        Returns:
+        Refrence ID in np.uint32 format if a valid ID is passed in. 
+        Otherwise returns 0 
+        """
+        refValue = np.uint32(0)
+
+        if type(refString) is str:
+            if len(refString) == 4:
+                refValue = np.uint32((ord(refString[0]) << 24) | (ord(refString[1]) << 16) | (ord(refString[2]) << 8) | ord(refString[3]))
+            elif len(refString) == 3:
+                refValue = np.uint32((ord(refString[0]) << 24) | (ord(refString[1]) << 16) | (ord(refString[2]) << 8))
+        return refValue
 
 taskQueue = Queue.Queue()
 utcTime = CurrentTime()
