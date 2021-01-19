@@ -8,10 +8,24 @@ import math
 import Queue
 import datetime
 
-GPS_POLL = 1.0                              #1Hz GPS module is used
-CLK_PRECISION = 10 ** -9                    #Perf Counter has Nanosecond precision
-NTP_VERSION = 3                             #NTP version used by server
-NTP_MAX_VERSION = 4                         #max supported NTP version
+GPS_POLL            = 1.0           #1Hz GPS module is used
+CLK_PRECISION       = 10 ** -9      #Perf Counter has Nanosecond precision
+GPS_ACCURACY        = 40 * 10 ** -9 #GPS Max Error
+NTP_VERSION         = 3             #NTP version used by server
+NTP_MAX_VERSION     = 4             #max supported NTP version
+SERIAL_DELAY        = 0.0           #average delay for a scentence to be recieved over serial
+SERIAL_PORT         = "COM4"
+
+#constants for UTC calculations
+SECONDS_IN_MINUTE   = 60.0
+SECONDS_IN_HOUR     = 60.0 * SECONDS_IN_MINUTE
+SECONDS_IN_HUNDRETH = 0.01
+SECONDS_IN_DAY      = 24.0 * SECONDS_IN_HOUR
+SECONDS_IN_MONTH    = [ 31.0 * SECONDS_IN_DAY, 28.0 * SECONDS_IN_DAY, 31.0 * SECONDS_IN_DAY,
+                        30.0 * SECONDS_IN_DAY, 31.0 * SECONDS_IN_DAY, 30.0 * SECONDS_IN_DAY,
+                        31.0 * SECONDS_IN_DAY, 31.0 * SECONDS_IN_DAY, 30.0 * SECONDS_IN_DAY,
+                        31.0 * SECONDS_IN_DAY, 30.0 * SECONDS_IN_DAY, 31.0 * SECONDS_IN_DAY]
+SECONDS_IN_YEAR     = 365 * SECONDS_IN_DAY
 
 mutex = threading.Lock()
 
@@ -39,6 +53,16 @@ class LeapInictaor(Enum):
     LAST_MINUTE_59 = 2
     ALARM = 3
 
+class NmeaGpsMessages(Enum):
+    """NMEA GPS Message types
+
+    Encodes a type of GPS NMEA message,
+    like GPGLL or GPGSA. Currently only supports 
+    GPRMC and GPZDA
+    """
+    GPRMC = 0
+    GPZDA = 1
+
 class CurrentTime:
     """Current Time Class
 
@@ -52,17 +76,21 @@ class CurrentTime:
         """
         self.__gpsTime = 0
         self.__perfTime = 0
+        self.__rootDelay = 0
 
-    def setTime(self, time):
+    def setTime(self, time, rxTime):
         """Stores the reference time and records the time it 
         was recieved
 
         Parameters:
         time -- current time in UTC format
+        rxTime -- performance counter value when NMEA sentence 
+        was recieved via serial
         """
         
         mutex.acquire()
-        self.__gpsTime = time
+        self.__rootDelay = time.perf_counter - rxTime + SERIAL_DELAY
+        self.__gpsTime = time 
         self.__perfTime = time.perf_counter()
         mutex.release()
         
@@ -73,14 +101,16 @@ class CurrentTime:
 
         Returns:
         Current Time in UTC format, 
-        Reference Time in UTC format
+        Reference Time in UTC format,
+        rootDelay in seconds
         """
         mutex.acquire()
-        elapsedTime = self.__gpsTime + time.perf_counter - self.__perfTime
-        refTime = self.__gpsTime
+        elapsedTime = self.__gpsTime + time.perf_counter - self.__perfTime + self.__rootDelay
+        refTime     = self.__gpsTime
+        rootDelay   = self.__rootDelay
         mutex.release()
 
-        return (elapsedTime, refTime)
+        return (elapsedTime, refTime, rootDelay)
 
 
 class NtpException(Exception):
@@ -329,6 +359,90 @@ class NtpPacket:
             elif len(refString) == 3:
                 refValue = np.uint32((ord(refString[0]) << 24) | (ord(refString[1]) << 16) | (ord(refString[2]) << 8))
         return refValue
+def secondsFromMonths(month):
+    """Seconds from all months preceeding provided month
+
+    Takes ina given month and calculates the sum of the number 
+    of seconds in all preceeding months. Does not account for leap years
+
+    Parameters:
+    month -- the current month in integer format
+    
+    Returns:
+    Seconds in all preceeding months, not including the current month
+    """
+    monthSeconds = 0
+
+    for i in range(0, month-1):
+        monthSeconds += SECONDS_IN_MONTH[i]
+    
+    return monthSeconds
+
+def leapYearsSince1970(year, month):
+    """Leap Years since 1970
+
+    Returns how many leap years have occured between 1970 
+    and supplied year. If past February this number in a 
+    leap year it includes the current year, otherwise doesn't.
+
+    Paramaters:
+    year -- years since 1970 in integer format
+    month -- the current month in integer format
+
+    Returns:
+    Number of leap days have occured
+    """
+
+    numLeapYears = np.int32((year + 2)  / 4)
+    if month < 3:
+        numLeapYears -= 1
+    return numLeapYears
+
+
+    
+def utcFromGps(nmeaSentence, nmeaSentenceName):
+    """UTC timestamp from GPS NMEA Message
+
+    Takes a NMEA message and extracts the UTC 
+    time. Currently only supports GPRMC and
+    GPZDA messages
+
+    Parameters:
+    nmeSentence -- NMEA sentence from GPS containing UTC time
+    nmeaSentenceName -- Type of NMEA sentence to parse (GPRMC or GPZDA)
+
+    Returns:
+    UTC timestamp if valid nmea message is sent in, 0 otherwise
+    """ 
+    
+    
+    utcTimestamp = 0
+
+    if nmeaSentenceName == NmeaGpsMessages.GPRMC:
+        nmeaFields  = nmeaSentence.split(',')
+
+        utcTime     = nmeaFields[1]
+        utcDate     = nmeaFields[9]
+
+        utcHour     = int(utcTime[0:2])
+        utcMinute   = int(utcTime[2:4])
+        utcSeconds  = int(utcTime[4:6])
+        utcHundreth = int(utcTime[7:9])
+
+        utcDay      = int(utcDate[0:2])
+        utcMonth    = int(utcDate[2:4])
+        utcYear     = int(utcDate[4:6]) + 30 # year between 1970 and 2000
+
+        #start building the timestamp from fields
+        utcTimestamp    = (utcHour * SECONDS_IN_HOUR) + (utcMinute * SECONDS_IN_MINUTE) + utcSeconds
+        utcTimestamp    += utcHundreth * SECONDS_IN_HUNDRETH
+        utcTimestamp    += utcDay * SECONDS_IN_DAY 
+        utcTimestamp    += secondsFromMonths(utcMonth)
+        utcTimestamp    += utcYear * SECONDS_IN_YEAR
+        utcTimestamp    += leapYearsSince1970(utcYear, utcMonth) * SECONDS_IN_DAY 
+
+        
+    return utcTimestamp
 
 taskQueue = Queue.Queue()
 utcTime = CurrentTime()
