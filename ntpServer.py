@@ -265,12 +265,12 @@ class NtpPacket:
         Transmit timeset is set when packet gets packed
 
         Parameters:
-        refTimestamp -- last time server was set by an external source
-        originTimestamp -- the transmit time of the ntp client packet
-        rxTimestamp --- timestamp of when the client packet was recieved
+        refTimestamp -- last time server was set by an external source (floating)
+        originTimestamp -- the transmit time of the ntp client packet (fixed)
+        rxTimestamp --- timestamp of when the client packet was recieved (floating)
         """
         self.__refTimestamp     = np.uint64(self._floatToFixed(refTimestamp, 32)) + self._UTC_TO_NTP
-        self.__originTimestamp  = np.uint64(self._floatToFixed(originTimestamp, 32)) + self._UTC_TO_NTP
+        self.__originTimestamp  = originTimestamp
         self.__rxTimestamp      = np.uint64(self._floatToFixed(rxTimestamp, 32)) + self._UTC_TO_NTP
 
     def getTxTimestamp(self):
@@ -279,7 +279,7 @@ class NtpPacket:
         Gets the time this packet was trasmitted
 
         Returns:
-        Transmitted timestamp in UTC format
+        Transmitted timestamp in fixed UTC format
         """
         return self.__txTimestamp
     
@@ -449,20 +449,45 @@ def utcFromGps(nmeaSentence, nmeaSentenceName):
 
 taskQueue = queue.Queue()
 utcTime = CurrentTime()
+stopFlag = False
+class IoThread(threading.Thread):
+    """I/O Thread for server
 
-with serial.Serial(os.getenv("SERIAL_PORT"), baudrate=os.getenv("SERIAL_BAUD"), timeout=1) as ser:
-    while True:
-        sioMesage = ser.readline().decode('ascii')  
-        startTime = time.perf_counter()    
-        
-        while sioMesage.split(',')[0] != os.getenv("NMEA_TYPE"):
-            sioMesage = ser.readline().decode('ascii')
-            startTime = time.perf_counter()
+    This thread handles input and output from the NTP
+    Server. This inlcudes both the Serial and optional 
+    display
+    """
+    def __init__(self):
+        """Default constructor"""
+        threading.Thread.__init__(self)
+    
+    def run(self):
+        with serial.Serial(os.getenv("SERIAL_PORT"), baudrate=os.getenv("SERIAL_BAUD"), timeout=1) as ser:
+            while stopFlag == False:
+                sioMesage = ser.readline().decode('ascii')  
+                startTime = time.perf_counter()    
+                
+                while sioMesage.split(',')[0] != os.getenv("NMEA_TYPE"):
+                    sioMesage = ser.readline().decode('ascii')
+                    startTime = time.perf_counter()
 
-        utcTime.setTime(utcFromGps(sioMesage, NmeaGpsMessages(os.getenv("NMEA_TYPE"))), startTime)
+                utcTime.setTime(utcFromGps(sioMesage, NmeaGpsMessages(os.getenv("NMEA_TYPE"))), startTime)
 
-        (currentTime, refTime, delay) = utcTime.getTime()
+                (currentTime, refTime, delay) = utcTime.getTime()
 
-        print("Current Time is:" + str(currentTime))
-        print("Reference Time is:" + str(refTime))
-        print("Root Delay is:" + str(delay))
+                #print("Current Time is:" + str(currentTime))
+                #print("Reference Time is:" + str(refTime))
+                #print("Root Delay is:" + str(delay))
+
+ioThread = IoThread()
+ioThread.start()
+
+while True:
+    try:
+        time.sleep(0.5)
+    except KeyboardInterrupt:
+        print("Exiting...")
+        stopFlag = True
+        ioThread.join()
+        print("Exited")
+        break
