@@ -7,17 +7,20 @@ import threading
 from enum import Enum
 import math
 import queue
+from numpy.lib.function_base import percentile
 import serial
+import select
 from dotenv import load_dotenv
+
 load_dotenv()
 
 GPS_POLL            = 1.0           #1Hz GPS module is used
-CLK_PRECISION       = 10 ** -9      #Perf Counter has Nanosecond precision
+CLK_PRECISION       = 1.0 / 2 ** 16 #Perf Counter has Nanosecond precision
 GPS_ACCURACY        = 40 * 10 ** -9 #GPS Max Error
 
 NTP_VERSION         = 3             #NTP version used by server
 NTP_MAX_VERSION     = 4             #max supported NTP version
-
+NTP_PORT            = 123
 
 #constants for UTC calculations
 SECONDS_IN_MINUTE   = 60.0
@@ -114,7 +117,17 @@ class CurrentTime:
         mutex.release()
 
         return (elapsedTime, refTime, rootDelay)
+    def getCurrentTime(self):
+        """Returns just the current time,
 
+        Returns:
+        Current Time in UTC format, 
+        """
+        mutex.acquire()
+        elapsedTime = self.__gpsTime + time.perf_counter() - self.__perfTime + self.__rootDelay
+        mutex.release()
+
+        return elapsedTime
 
 class NtpException(Exception):
     """Exception raised by NTP Packet module
@@ -194,7 +207,7 @@ class NtpPacket:
         self.__rxTimestamp      = np.uint64(0)              #64 bit undsined fixed
         self.__txTimestamp      = np.uint64(0)              #64 bit unsigned fixed
 
-    def __init__(self, buffer):
+    def fromBuffer(self, buffer):
         """Constructor
 
         Constructs an NTP pcaket from a valid buffer
@@ -256,7 +269,7 @@ class NtpPacket:
         rootDispersion -- root dispersion value in floating
         """
         self.__rootDelay = np.int32(self._floatToFixed(rootDelay, 16))
-        self.__rootDispersion = np.int32(self._floatToFixed(rootDispersion, 16))
+        self.__rootDispersion = 1 #np.int32(self._floatToFixed(rootDispersion, 16))
 
     def setTimestamps(self, refTimestamp, originTimestamp, rxTimestamp):
         """Set Timestamps
@@ -300,7 +313,7 @@ class NtpPacket:
         NtpException -- in case invalid or incomplete ntp fields
         """
 
-        self.__txTimestamp = np.int64(self._floatToFixed(txTimestamp)) + self._UTC_TO_NTP
+        self.__txTimestamp = np.int64(self._floatToFixed(txTimestamp,32)) + self._UTC_TO_NTP
 
         try:
             packed = struct.pack(self._PACKET_FORMAT, 
@@ -311,14 +324,14 @@ class NtpPacket:
                                 int(self.__rootDelay),
                                 int(self.__rootDispersion),
                                 int(self.__refId),
-                                int((self.__refTimestamp & 0xFFFFFFFF00000000) >> 32), 
-                                int(self.__refTimestamp & 0xFFFFFFFF),
-                                int((self.__originTimestamp & 0xFFFFFFFF00000000) >> 32), 
-                                int(self.__originTimestamp & 0xFFFFFFFF),
-                                int((self.__rxTimestamp & 0xFFFFFFFF00000000) >> 32), 
-                                int(self.__rxTimestamp & 0xFFFFFFFF),
-                                int((self.__txTimestamp & 0xFFFFFFFF00000000) >> 32), 
-                                int(self.__txTimestamp & 0xFFFFFFFF))
+                                (int(self.__refTimestamp) & 0xFFFFFFFF00000000) >> 32, 
+                                int(self.__refTimestamp) & 0xFFFFFFFF,
+                                (int(self.__originTimestamp) & 0xFFFFFFFF00000000) >> 32, 
+                                int(self.__originTimestamp) & 0xFFFFFFFF,
+                                (int(self.__rxTimestamp) & 0xFFFFFFFF00000000) >> 32, 
+                                int(self.__rxTimestamp) & 0xFFFFFFFF,
+                                (int(self.__txTimestamp) & 0xFFFFFFFF00000000) >> 32, 
+                                int(self.__txTimestamp) & 0xFFFFFFFF)
         except struct.error:
             raise NtpException("Invalid NTP Fields")
         
@@ -337,7 +350,7 @@ class NtpPacket:
         Returns:
         Original input in fixed point
         """
-        intPart = int(floatNum)
+        intPart = math.floor(floatNum)
         fracPart = int(abs(floatNum - int(floatNum)) * 2 ** fracBits)
         return intPart << fracBits | fracPart
 
@@ -450,6 +463,7 @@ def utcFromGps(nmeaSentence, nmeaSentenceName):
 taskQueue = queue.Queue()
 utcTime = CurrentTime()
 stopFlag = False
+
 class IoThread(threading.Thread):
     """I/O Thread for server
 
@@ -462,6 +476,7 @@ class IoThread(threading.Thread):
         threading.Thread.__init__(self)
     
     def run(self):
+        global stopFlag, utcTime
         with serial.Serial(os.getenv("SERIAL_PORT"), baudrate=os.getenv("SERIAL_BAUD"), timeout=1) as ser:
             while stopFlag == False:
                 sioMesage = ser.readline().decode('ascii')  
@@ -473,14 +488,78 @@ class IoThread(threading.Thread):
 
                 utcTime.setTime(utcFromGps(sioMesage, NmeaGpsMessages(os.getenv("NMEA_TYPE"))), startTime)
 
-                (currentTime, refTime, delay) = utcTime.getTime()
+                #(currentTime, refTime, delay) = utcTime.getTime()
 
                 #print("Current Time is:" + str(currentTime))
                 #print("Reference Time is:" + str(refTime))
                 #print("Root Delay is:" + str(delay))
 
+class RxThread(threading.Thread):
+    """NTP Recieve Thread
+
+    This thread handles recieving NTP requests and pushing them
+    to a queue to be handled by the TxThread
+    """
+    def __init__(self, socket):
+        """Default constructor"""
+        threading.Thread.__init__(self)
+        self.__socket = socket
+    def run(self):
+        global stopFlag, taskQueue, utcTime
+        while stopFlag == False:
+            rlist,wlist,elist = select.select([self.__socket],[],[],1)
+            if len(rlist) != 0:
+                for temp in rlist:
+                    try:
+                        data,address = temp.recvfrom(1024)
+                        taskQueue.put((data,address,utcTime.getCurrentTime()))
+                    except socket.error as err:
+                        print(err)
+
+class TxThread(threading.Thread):
+    """NTP Transmit Thread
+
+    This thread responds to NTP requests from clients
+    """
+    def __init__(self, socket):
+        """Default constructor"""
+        threading.Thread.__init__(self)
+        self.__socket = socket
+    def run(self):
+        global stopFlag, taskQueue, utcTime
+        while stopFlag == False:
+            try:
+                if taskQueue.empty() == False:
+                    data,address,rxTime = taskQueue.get(timeout=1)
+                    rxPacket = NtpPacket(3, Mode.CLIENT, "GPS")
+                    rxPacket.fromBuffer(data)
+                    txPacket = NtpPacket(3, Mode.SERVER, "GPS")
+
+                    txPacket.setPoll(10)
+                    txPacket.setPrecision(CLK_PRECISION)
+
+                    txTime,refTime,rootDelay = utcTime.getTime()
+
+                    
+                    txPacket.setRootValues(rootDelay,float(os.getenv("SERIAL_ERROR")))
+                    txPacket.setTimestamps(refTime,rxPacket.getTxTimestamp(),rxTime)
+
+                    self.__socket.sendto(txPacket.getBuffer(txTime),address)
+            except queue.Empty:
+                continue
+
+
+socket = socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
+socket.bind((os.getenv("NTP_ADDRESS"),NTP_PORT))
+
 ioThread = IoThread()
 ioThread.start()
+
+txThread = TxThread(socket)
+txThread.start()
+
+rxThread = RxThread(socket)
+rxThread.start()
 
 while True:
     try:
@@ -489,5 +568,7 @@ while True:
         print("Exiting...")
         stopFlag = True
         ioThread.join()
+        txThread.join()
+        rxThread.join()
         print("Exited")
         break
