@@ -5,8 +5,8 @@ import time
 import threading
 from enum import Enum
 import math
-import Queue
-import datetime
+import queue
+import serial
 
 GPS_POLL            = 1.0           #1Hz GPS module is used
 CLK_PRECISION       = 10 ** -9      #Perf Counter has Nanosecond precision
@@ -15,6 +15,7 @@ NTP_VERSION         = 3             #NTP version used by server
 NTP_MAX_VERSION     = 4             #max supported NTP version
 SERIAL_DELAY        = 0.0           #average delay for a scentence to be recieved over serial
 SERIAL_PORT         = "COM4"
+SERIAL_BAUD         = 9600
 
 #constants for UTC calculations
 SECONDS_IN_MINUTE   = 60.0
@@ -78,7 +79,7 @@ class CurrentTime:
         self.__perfTime = 0
         self.__rootDelay = 0
 
-    def setTime(self, time, rxTime):
+    def setTime(self, newTime, rxTime):
         """Stores the reference time and records the time it 
         was recieved
 
@@ -89,8 +90,8 @@ class CurrentTime:
         """
         
         mutex.acquire()
-        self.__rootDelay = time.perf_counter - rxTime + SERIAL_DELAY
-        self.__gpsTime = time 
+        self.__rootDelay = time.perf_counter() - rxTime + SERIAL_DELAY
+        self.__gpsTime = newTime 
         self.__perfTime = time.perf_counter()
         mutex.release()
         
@@ -105,7 +106,7 @@ class CurrentTime:
         rootDelay in seconds
         """
         mutex.acquire()
-        elapsedTime = self.__gpsTime + time.perf_counter - self.__perfTime + self.__rootDelay
+        elapsedTime = self.__gpsTime + time.perf_counter() - self.__perfTime + self.__rootDelay
         refTime     = self.__gpsTime
         rootDelay   = self.__rootDelay
         mutex.release()
@@ -444,8 +445,22 @@ def utcFromGps(nmeaSentence, nmeaSentenceName):
         
     return utcTimestamp
 
-taskQueue = Queue.Queue()
+taskQueue = queue.Queue()
 utcTime = CurrentTime()
 
+with serial.Serial(SERIAL_PORT, baudrate=SERIAL_BAUD, timeout=1) as ser:
+    while True:
+        sioMesage = ser.readline().decode('ascii')  
+        startTime = time.perf_counter()    
+        
+        while sioMesage.split(',')[0] != "$GPRMC":
+            sioMesage = ser.readline().decode('ascii')
+            startTime = time.perf_counter()
 
+        utcTime.setTime(utcFromGps(sioMesage, NmeaGpsMessages.GPRMC), startTime)
 
+        (currentTime, refTime, delay) = utcTime.getTime()
+
+        print("Current Time is:" + str(currentTime))
+        print("Reference Time is:" + str(refTime))
+        print("Root Delay is:" + str(delay))
