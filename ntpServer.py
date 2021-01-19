@@ -1,3 +1,4 @@
+import os
 import numpy as np
 import socket
 import struct
@@ -7,15 +8,16 @@ from enum import Enum
 import math
 import queue
 import serial
+from dotenv import load_dotenv
+load_dotenv()
 
 GPS_POLL            = 1.0           #1Hz GPS module is used
 CLK_PRECISION       = 10 ** -9      #Perf Counter has Nanosecond precision
 GPS_ACCURACY        = 40 * 10 ** -9 #GPS Max Error
+
 NTP_VERSION         = 3             #NTP version used by server
 NTP_MAX_VERSION     = 4             #max supported NTP version
-SERIAL_DELAY        = 0.0           #average delay for a scentence to be recieved over serial
-SERIAL_PORT         = "COM4"
-SERIAL_BAUD         = 9600
+
 
 #constants for UTC calculations
 SECONDS_IN_MINUTE   = 60.0
@@ -61,8 +63,8 @@ class NmeaGpsMessages(Enum):
     like GPGLL or GPGSA. Currently only supports 
     GPRMC and GPZDA
     """
-    GPRMC = 0
-    GPZDA = 1
+    GPRMC = "$GPRMC"
+    GPZDA = "$GPZDA"
 
 class CurrentTime:
     """Current Time Class
@@ -90,7 +92,7 @@ class CurrentTime:
         """
         
         mutex.acquire()
-        self.__rootDelay = time.perf_counter() - rxTime + SERIAL_DELAY
+        self.__rootDelay = time.perf_counter() - rxTime + float(os.getenv("SERIAL_DELAY"))
         self.__gpsTime = newTime 
         self.__perfTime = time.perf_counter()
         mutex.release()
@@ -448,16 +450,16 @@ def utcFromGps(nmeaSentence, nmeaSentenceName):
 taskQueue = queue.Queue()
 utcTime = CurrentTime()
 
-with serial.Serial(SERIAL_PORT, baudrate=SERIAL_BAUD, timeout=1) as ser:
+with serial.Serial(os.getenv("SERIAL_PORT"), baudrate=os.getenv("SERIAL_BAUD"), timeout=1) as ser:
     while True:
         sioMesage = ser.readline().decode('ascii')  
         startTime = time.perf_counter()    
         
-        while sioMesage.split(',')[0] != "$GPRMC":
+        while sioMesage.split(',')[0] != os.getenv("NMEA_TYPE"):
             sioMesage = ser.readline().decode('ascii')
             startTime = time.perf_counter()
 
-        utcTime.setTime(utcFromGps(sioMesage, NmeaGpsMessages.GPRMC), startTime)
+        utcTime.setTime(utcFromGps(sioMesage, NmeaGpsMessages(os.getenv("NMEA_TYPE"))), startTime)
 
         (currentTime, refTime, delay) = utcTime.getTime()
 
