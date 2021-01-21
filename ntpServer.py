@@ -183,7 +183,7 @@ class NtpPacket:
         """
         self.__leap = LeapInictaor.NO_WARNING
         
-        if version > 0 and version < 5:
+        if version > 0 and version <= NTP_MAX_VERSION:
             self.__version = np.int8(version)
         else:
             raise NtpException("Invalid NTP Version")
@@ -200,7 +200,11 @@ class NtpPacket:
         self.__precision        = np.int8(0)                #8 bit signed int
         self.__rootDelay        = np.int32(0)               #32 bit signed fixed
         self.__rootDispersion   = np.int32(0)               #32 bit signed fixed
-        self.__refId            = self._stringToInt(refId)  #4 character string
+
+        if type(refId) is str:
+            self.__refId        = self._stringToInt(refId)  #4 character string
+        else: 
+            raise NtpException("Invalid NTP refId")
 
         self.__refTimestamp     = np.uint64(0)              #64 bit unsigned fixed
         self.__originTimestamp  = np.uint64(0)              #64 bit unsigned fixed
@@ -235,7 +239,8 @@ class NtpPacket:
         self.__refTimestamp     = np.uint64((unpacked[7] << 32) | unpacked[8])
         self.__originTimestamp  = np.uint64((unpacked[9] << 32) | unpacked[10])
         self.__rxTimestamp      = np.uint64((unpacked[11] << 32) | unpacked[12])
-        self.__txTimestamp      = np.uint64((unpacked[13] << 32) | unpacked[14])            
+        self.__txTimestamp      = np.uint64((unpacked[13] << 32) | unpacked[14])  
+
 
     def setPoll(self, poll):
         """Set Poll
@@ -269,13 +274,14 @@ class NtpPacket:
         rootDispersion -- root dispersion value in floating
         """
         self.__rootDelay = np.int32(self._floatToFixed(rootDelay, 16))
-        self.__rootDispersion = 1 #np.int32(self._floatToFixed(rootDispersion, 16))
+        self.__rootDispersion = np.int32(self._floatToFixed(rootDispersion, 16))
 
     def setTimestamps(self, refTimestamp, originTimestamp, rxTimestamp):
         """Set Timestamps
 
         Sets the reference, origin and recieve timestamps. 
-        Transmit timeset is set when packet gets packed
+        Transmit timeset is set when packet gets packed.
+        *note* floating point must be UTC, whereas fixed must be NTP format
 
         Parameters:
         refTimestamp -- last time server was set by an external source (floating)
@@ -460,7 +466,7 @@ def nmeaChecksum(nmeaSentence):
     for char in data:
         calcChecksum ^= ord(char)
 
-    return calcChecksum == int(checksum,16)
+    return calcChecksum == int(checksum, 16)
     
 def utcFromGps(nmeaSentence, nmeaSentenceName):
     """UTC timestamp from GPS NMEA Message
@@ -477,23 +483,33 @@ def utcFromGps(nmeaSentence, nmeaSentenceName):
     UTC timestamp if valid nmea message is sent in, 0 otherwise
     """ 
     
-    
+    valid =False
     utcTimestamp = 0
     if nmeaChecksum(nmeaSentence):
         nmeaFields  = nmeaSentence.split(',')
 
         if nmeaSentenceName == NmeaGpsMessages.GPRMC:
-            utcTime     = nmeaFields[1]
+            valid       = True
+            
             utcDate     = nmeaFields[9]
+
+            utcDay      = int(utcDate[0:2])
+            utcMonth    = int(utcDate[2:4])
+            utcYear     = int(utcDate[4:6]) + 30 # year between 1970 and 2000
+        elif nmeaSentenceName == NmeaGpsMessages.GPZDA:
+            valid       = True
+
+            utcDay      = int(nmeaFields[2])
+            utcMonth    = int(nmeaFields[3])
+            utcYear     = int(nmeaFields[4]) - 1970
+            
+        if valid == True:
+            utcTime     = nmeaFields[1]
 
             utcHour     = int(utcTime[0:2])
             utcMinute   = int(utcTime[2:4])
             utcSeconds  = int(utcTime[4:6])
             utcHundreth = int(utcTime[7:9])
-
-            utcDay      = int(utcDate[0:2])
-            utcMonth    = int(utcDate[2:4])
-            utcYear     = int(utcDate[4:6]) + 30 # year between 1970 and 2000
 
             #start building the timestamp from fields
             utcTimestamp    = (utcHour * SECONDS_IN_HOUR) + (utcMinute * SECONDS_IN_MINUTE) + utcSeconds
@@ -535,13 +551,7 @@ class IoThread(threading.Thread):
 
                 utcTime.setTime(utcFromGps(sioMesage.replace("\r\n",""), NmeaGpsMessages(os.getenv("NMEA_TYPE"))), startTime)
 
-                #(currentTime, refTime, delay) = utcTime.getTime()
-
-                #print("Current Time is:" + str(currentTime))
-                #print("Reference Time is:" + str(refTime))
-                #print("Root Delay is:" + str(delay))
-
-                time.sleep(0.00001)
+                time.sleep(0.00001) #small sleep, prevents cpu redline
 
 class RxThread(threading.Thread):
     """NTP Recieve Thread
@@ -564,7 +574,7 @@ class RxThread(threading.Thread):
                         taskQueue.put((data,address,utcTime.getCurrentTime()))
                     except socket.error as err:
                         print(err)
-            time.sleep(0.00001)
+            time.sleep(0.00001) #small sleep, prevents cpu redline
 
 class TxThread(threading.Thread):
     """NTP Transmit Thread
@@ -582,25 +592,28 @@ class TxThread(threading.Thread):
                 if taskQueue.empty() == False:
                     data,address,rxTime = taskQueue.get(timeout=1)
                     rxPacket = NtpPacket(3, Mode.CLIENT, "GPS")
-                    rxPacket.fromBuffer(data)
-                    rxMode = rxPacket.getMode()
+                    try:
+                        rxPacket.fromBuffer(data)
+                        rxMode = rxPacket.getMode()
 
-                    #special case of accepting symetric active packets, as that is what PDC send
-                    #to upstream ntp server in an active directory enviroment
-                    if rxMode == Mode.CLIENT or rxMode == Mode.SYMMETRIC_ACTIVE:
-                        txPacket = NtpPacket(3, Mode.SERVER, "GPS")
+                        #special case of accepting symetric active packets, as that is what PDC send
+                        #to upstream ntp server in an active directory enviroment
+                        if rxMode == Mode.CLIENT or rxMode == Mode.SYMMETRIC_ACTIVE:
+                            txPacket = NtpPacket(3, Mode.SERVER, "GPS")
 
-                        txPacket.setPoll(10)
-                        txPacket.setPrecision(CLK_PRECISION)
+                            txPacket.setPoll(os.getenv("NTP_POLL"))
+                            txPacket.setPrecision(CLK_PRECISION)
 
-                        txTime,refTime,rootDelay = utcTime.getTime()
+                            txTime,refTime,rootDelay = utcTime.getTime()
 
-                        
-                        txPacket.setRootValues(rootDelay,float(os.getenv("SERIAL_ERROR")))
-                        txPacket.setTimestamps(refTime,rxPacket.getTxTimestamp(),rxTime)
+                            txPacket.setRootValues(rootDelay,float(os.getenv("SERIAL_ERROR")))
+                            txPacket.setTimestamps(refTime,rxPacket.getTxTimestamp(),rxTime)
 
-                        self.__socket.sendto(txPacket.getBuffer(txTime),address)
-                time.sleep(0.00001)
+                            self.__socket.sendto(txPacket.getBuffer(txTime),address)
+                    except NtpException:
+                        print("Bad NTP packet from client")
+                    
+                time.sleep(0.00001) #small sleep, prevents cpu redline
             except queue.Empty:
                 continue
 
