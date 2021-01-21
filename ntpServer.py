@@ -15,7 +15,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 GPS_POLL            = 1.0           #1Hz GPS module is used
-CLK_PRECISION       = 1.0 / 2 ** 16 #Perf Counter has Nanosecond precision
+CLK_PRECISION       = 2 ** -16 #Perf Counter has Nanosecond precision
 GPS_ACCURACY        = 40 * 10 ** -9 #GPS Max Error
 
 NTP_VERSION         = 3             #NTP version used by server
@@ -49,7 +49,7 @@ class Mode(Enum):
     RESERVED_CONTROL = 6
     RESERVED_PRIVATE = 7
 
-class LeapInictaor(Enum):
+class LeapIndicator(Enum):
     """NTP Leap Indicator Enum
 
     Encodes the 4 leap indictaor states
@@ -72,8 +72,8 @@ class NmeaGpsMessages(Enum):
 class CurrentTime:
     """Current Time Class
 
-    Stores reference rime from an external source, along with the time
-    it was recieved
+    Stores reference time from an external source, along with the time
+    it was received
     """
     def __init__(self):
         """Constructor
@@ -117,6 +117,7 @@ class CurrentTime:
         mutex.release()
 
         return (elapsedTime, refTime, rootDelay)
+
     def getCurrentTime(self):
         """Returns just the current time,
 
@@ -181,7 +182,7 @@ class NtpPacket:
         Raises:
         NtpException -- in case invalid or incomplete ntp fields
         """
-        self.__leap = LeapInictaor.NO_WARNING
+        self.__leap = LeapIndicator.NO_WARNING
         
         if version > 0 and version <= NTP_MAX_VERSION:
             self.__version = np.int8(version)
@@ -227,7 +228,7 @@ class NtpPacket:
         except struct.error:
             raise NtpException("Invalid NTP fields")
 
-        self.__leap             = LeapInictaor((unpacked[0] >> 6) & 0x3)
+        self.__leap             = LeapIndicator((unpacked[0] >> 6) & 0x3)
         self.__version          = np.int8((unpacked[0] >> 3) & 0x7)
         self.__mode             = Mode(unpacked[0] & 0x7)
         self.__stratum          = np.int8(unpacked[1])
@@ -405,6 +406,7 @@ class NtpPacket:
             elif len(refString) == 3:
                 refValue = np.uint32((ord(refString[0]) << 24) | (ord(refString[1]) << 16) | (ord(refString[2]) << 8))
         return refValue
+        
 def secondsFromMonths(month):
     """Seconds from all months preceeding provided month
 
@@ -531,7 +533,7 @@ class IoThread(threading.Thread):
     """I/O Thread for server
 
     This thread handles input and output from the NTP
-    Server. This inlcudes both the Serial and optional 
+    Server. This includes both the Serial and optional 
     display
     """
     def __init__(self):
@@ -566,12 +568,12 @@ class RxThread(threading.Thread):
     def run(self):
         global stopFlag, taskQueue, utcTime
         while stopFlag == False:
-            rlist,wlist,elist = select.select([self.__socket],[],[],1)
+            rlist,wlist,elist = select.select([self.__socket], [], [], 1)
             if len(rlist) != 0:
                 for temp in rlist:
                     try:
                         data,address = temp.recvfrom(1024)
-                        taskQueue.put((data,address,utcTime.getCurrentTime()))
+                        taskQueue.put((data, address, utcTime.getCurrentTime()))
                     except socket.error as err:
                         print(err)
             time.sleep(0.00001) #small sleep, prevents cpu redline
@@ -590,7 +592,7 @@ class TxThread(threading.Thread):
         while stopFlag == False:
             try:
                 if taskQueue.empty() == False:
-                    data,address,rxTime = taskQueue.get(timeout=1)
+                    data, address, rxTime = taskQueue.get(timeout=1)
                     rxPacket = NtpPacket(3, Mode.CLIENT, "GPS")
                     try:
                         rxPacket.fromBuffer(data)
@@ -606,10 +608,10 @@ class TxThread(threading.Thread):
 
                             txTime,refTime,rootDelay = utcTime.getTime()
 
-                            txPacket.setRootValues(rootDelay,float(os.getenv("SERIAL_ERROR")))
-                            txPacket.setTimestamps(refTime,rxPacket.getTxTimestamp(),rxTime)
+                            txPacket.setRootValues(rootDelay, float(os.getenv("SERIAL_ERROR")))
+                            txPacket.setTimestamps(refTime, rxPacket.getTxTimestamp(), rxTime)
 
-                            self.__socket.sendto(txPacket.getBuffer(txTime),address)
+                            self.__socket.sendto(txPacket.getBuffer(txTime), address)
                     except NtpException:
                         print("Bad NTP packet from client")
                     
@@ -618,8 +620,8 @@ class TxThread(threading.Thread):
                 continue
 
 
-socket = socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
-socket.bind((os.getenv("NTP_ADDRESS"),NTP_PORT))
+socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+socket.bind((os.getenv("NTP_ADDRESS"), NTP_PORT))
 
 ioThread = IoThread()
 ioThread.start()
