@@ -14,9 +14,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-GPS_POLL            = 1.0           #1Hz GPS module is used
 CLK_PRECISION       = 2 ** -16 #Perf Counter has Nanosecond precision
-GPS_ACCURACY        = 40 * 10 ** -9 #GPS Max Error
 
 NTP_VERSION         = 3             #NTP version used by server
 NTP_MAX_VERSION     = 4             #max supported NTP version
