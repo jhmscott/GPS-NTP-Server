@@ -119,7 +119,7 @@ def setup():
     env = open(".env", "w")
     env.write("SERIAL_PORT=" + serPort + "\n")
     env.write("SERIAL_BAUD=" + str(baudRate) + "\n")
-    env.write("SEIRAL_DELAY=" + str(meanDelay)+ "\n")
+    env.write("SERIAL_DELAY=" + str(meanDelay)+ "\n")
     env.write("SERIAL_ERROR=" + str(delayErr)+ "\n")
     env.write("NMEA_TYPE=" +  ("$GPZDA" if nmeaType == 1 else "$GPRMC") + "\n\n")
     env.write("NTP_ADDRESS=" + addresses[address] + "\n")

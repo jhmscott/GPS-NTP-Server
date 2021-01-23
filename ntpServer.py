@@ -234,7 +234,7 @@ class NtpPacket:
         self.__precision        = np.int8(unpacked[3])
         self.__rootDelay        = np.int32(unpacked[4])
         self.__rootDispersion   = np.int32(unpacked[5])
-        self.__refId            = np.int32(unpacked[6])
+        self.__refId            = unpacked[6]
         self.__refTimestamp     = np.uint64((unpacked[7] << 32) | unpacked[8])
         self.__originTimestamp  = np.uint64((unpacked[9] << 32) | unpacked[10])
         self.__rxTimestamp      = np.uint64((unpacked[11] << 32) | unpacked[12])
@@ -361,10 +361,10 @@ class NtpPacket:
         bit integer and fractional bits
 
         """
-        if type(floatOrFixed) is np.uint64:
-            return floatOrFixed
+        if type(floatOrFixed) is float:
+            return self._floatToFixed(floatOrFixed, 32) + self._UTC_TO_NTP       
         else:
-            return self._floatToFixed(floatOrFixed, 32) + self._UTC_TO_NTP
+            return floatOrFixed
 
     def _floatToFixed(self, floatNum, fracBits):
         """Floating point to fixed point conversion
@@ -541,6 +541,10 @@ class IoThread(threading.Thread):
     def run(self):
         global stopFlag, utcTime
         with serial.Serial(os.getenv("SERIAL_PORT"), baudrate=os.getenv("SERIAL_BAUD"), timeout=1) as ser:
+            #discard first 5 lines (On raspberry pi first lines are garbage)
+            for i in range(0,5):
+                ser.readline()
+            
             while stopFlag == False:
                 sioMesage = ser.readline().decode('ascii')  
                 startTime = time.perf_counter()    
