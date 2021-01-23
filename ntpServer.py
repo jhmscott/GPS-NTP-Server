@@ -232,9 +232,9 @@ class NtpPacket:
         self.__stratum          = np.int8(unpacked[1])
         self.__poll             = np.int8(unpacked[2])
         self.__precision        = np.int8(unpacked[3])
-        self.__rootDelay        = np.int32(unpacked[4])
-        self.__rootDispersion   = np.int32(unpacked[5])
-        self.__refId            = unpacked[6]
+        self.__rootDelay        = np.uint32(unpacked[4])
+        self.__rootDispersion   = np.uint32(unpacked[5])
+        self.__refId            = np.uint32(unpacked[6])
         self.__refTimestamp     = np.uint64((unpacked[7] << 32) | unpacked[8])
         self.__originTimestamp  = np.uint64((unpacked[9] << 32) | unpacked[10])
         self.__rxTimestamp      = np.uint64((unpacked[11] << 32) | unpacked[12])
@@ -362,9 +362,9 @@ class NtpPacket:
 
         """
         if type(floatOrFixed) is float:
-            return self._floatToFixed(floatOrFixed, 32) + self._UTC_TO_NTP       
+            return floatOrFixed        
         else:
-            return floatOrFixed
+            return self._floatToFixed(floatOrFixed, 32) + self._UTC_TO_NTP
 
     def _floatToFixed(self, floatNum, fracBits):
         """Floating point to fixed point conversion
