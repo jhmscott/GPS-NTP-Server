@@ -361,7 +361,7 @@ class NtpPacket:
         bit integer and fractional bits
 
         """
-        if type(floatOrFixed) is float:
+        if type(floatOrFixed) is np.uint64:
             return floatOrFixed        
         else:
             return self._floatToFixed(floatOrFixed, 32) + self._UTC_TO_NTP
