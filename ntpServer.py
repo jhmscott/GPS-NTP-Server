@@ -554,9 +554,7 @@ class IoThread(threading.Thread):
                     startTime = time.perf_counter()
 
                 utcTime.setTime(utcFromGps(sioMesage.replace("\r\n",""), NmeaGpsMessages(os.getenv("NMEA_TYPE"))), startTime)
-
-                time.sleep(0.00001) #small sleep, prevents cpu redline
-
+                
 class RxThread(threading.Thread):
     """NTP Recieve Thread
 
