@@ -32,6 +32,14 @@ If you just want to test the server, you can run python ntpServer.py from a comm
 ## Running as a service
 I personally use pm2 in order to run the program as a service (https://pm2.keymetrics.io/) It is incredibly convenient, and even provides logging. However, it is not required and you can set it up any way you would like. 
 
+## Upcoming Features
+- Support for leap second indicator
+- Display current time and number of active satalites on external LCD
+- Support for operation in NTP broadcast mode
+- Ability to set system time from the GPS 
+- Web Management Interface
+- Support for quartz RTC for accurate time keeping when GPS fails
+
 ## v1.0
 
 - Support for $GPZDA and $GPRMC NMEA messages
