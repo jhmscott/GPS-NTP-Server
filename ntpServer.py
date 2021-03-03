@@ -440,7 +440,7 @@ def leapYearsSince1970(year, month):
     """
 
     numLeapYears = np.int32((year + 2)  / 4)
-    if month < 3:
+    if month < 3 and (year + 2)  % 4 == 0:
         numLeapYears -= 1
     return numLeapYears
 
